@@ -7,3 +7,7 @@ build/
 *.model
 dist/
 *.writing
+
+.project
+
+.pydevproject
