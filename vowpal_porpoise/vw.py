@@ -4,7 +4,7 @@ import sys
 import subprocess
 import shlex
 import tempfile
-from vp_utils import safe_remove, VPLogger
+from .vp_utils import safe_remove, VPLogger
 
 class VW:
     def __init__(self,
@@ -42,6 +42,7 @@ class VW:
                  incremental=False,
                  mem=None,
                  nn=None,
+                 test_cache_file=None,
                  **kwargs):
         assert moniker and passes
 
@@ -76,6 +77,7 @@ class VW:
 
         self.incremental = incremental
         self.filename = '%s.model' % self.handle
+        self.test_cache_file = test_cache_file
 
         self.name = name
         self.bits = bits
@@ -102,6 +104,7 @@ class VW:
         self.bfgs = bfgs
         self.mem = mem
         self.nn = nn
+        self.extra_args = kwargs
 
         # Do some sanity checking for compatability between models
         if self.lda:
@@ -146,6 +149,24 @@ class VW:
         if self.bfgs:                            l.append('--bfgs')
         if self.adaptive:                        l.append('--adaptive')
         if self.nn                  is not None: l.append('--nn=%d' % self.nn)
+
+
+
+        for key, value in self.extra_args.items():
+            if len(key)==1:
+                option = '-{}'.format(key)
+            else:
+                option = '--{}'.format(key)
+            if value is True:
+                arg_list = [option]
+            elif isinstance(value, str):
+                arg_list = ['{} {}'.format(option, value)]
+            elif hasattr(value, '__getitem__'):  # Listlike value
+                arg_list = [ '{} {}'.format(option, subvalue) for subvalue in value ]
+            else:
+                arg_list = ['{} {}'.format(option, value)]
+            l.extend(arg_list)
+
         return ' '.join(l)
 
     def vw_train_command(self, cache_file, model_file):
@@ -158,11 +179,21 @@ class VW:
                     % (self.passes, cache_file, model_file)
 
     def vw_test_command(self, model_file, prediction_file):
-        return self.vw_base_command([self.vw]) + ' -t -i %s -p %s' % (model_file, prediction_file)
+        if self.test_cache_file:
+            return self.vw_base_command([self.vw]) + ' --cache_file %s -t -i %s -p %s' % (self.test_cache_file, model_file, prediction_file)
+        else:
+            return self.vw_base_command([self.vw]) + ' -t -i %s -p %s' % (model_file, prediction_file)
+
+    def vw_readable_model_command(self, model_file, readable_file):
+        """
+        To create a human-readable model from a regular model store, we need to read
+        in the model and write to an "invert_hash" file. Make sure not to modify the model
+        any further (use the "-t" option).
+        """
+        return self.vw_base_command([self.vw]) + ' -t -i %s --invert_hash %s' % (model_file, readable_file)
 
     def vw_test_command_library(self, model_file):
         return self.vw_base_command([]) + ' -t -i %s' % (model_file)
-
     @contextmanager
     def training(self):
         self.start_training()
@@ -226,6 +257,29 @@ class VW:
 
         # Set the library instance pusher
         self.push_instance = self.predict_push_instance
+        
+    def create_readable_model(self, readable_file, features):
+        """Open the model file for this process and attempt to re-write
+        it as something human-readable. We can't invert the feature hashes, so
+        this process relies on showing VW each feature in the model at least once.
+        Rely on the user to supply a list of features in each namespace, and
+        give VW an example with each of those features.
+        """
+        model_file = self.get_model_file()
+        
+        # To extract the coefficients from the stored file, we need to send each feature
+        # at least once. Construct a string that hits everything we were told about.
+        # If "features" is a list, then assume none of the features are in a namespace.
+        if not isinstance(features, dict):
+            features = {"":features}
+        feature_string = " ".join(["|{} {}".format(key, " ".join(value)) for key, value in features.items()])
+        
+        # Create the VW process, send our single example, and close the process.
+        try:
+            self.vw_process = self.make_subprocess(self.vw_readable_model_command(model_file, readable_file))
+            self.push_instance_stdin("1 {}".format(feature_string))
+        finally:
+            self.close_process()
 
     def end_predicting_library(self):
         # Close the process
@@ -236,7 +290,7 @@ class VW:
         if self.lda:
             return map(float, p.split())
         else:
-            return float(p.split()[0])
+            return float(p)
 
     def read_predictions_(self):
         for x in open(self.prediction_file):
@@ -263,7 +317,7 @@ class VW:
             stdout.write(command + '\n')
             stderr.write(command + '\n')
         self.log.debug('Running command: "%s"' % str(command))
-        result = subprocess.Popen(shlex.split(str(command)), stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, close_fds=True, universal_newlines=True)
+        result = subprocess.Popen(shlex.split(str(command)), stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, close_fds=True, universal_newlines=False)
         result.command = command
         return result
 
