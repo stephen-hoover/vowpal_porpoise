@@ -8,6 +8,7 @@ from .vp_utils import safe_remove, VPLogger
 
 class VW:
     def __init__(self,
+                 datafile=None,
                  logger=None,
                  vw='vw',
                  moniker=None,
@@ -42,7 +43,8 @@ class VW:
                  incremental=False,
                  mem=None,
                  nn=None,
-                 test_cache_file=None,
+                 cache=None,
+                 compressed=False,
                  **kwargs):
         assert moniker and passes
 
@@ -77,7 +79,7 @@ class VW:
 
         self.incremental = incremental
         self.filename = '%s.model' % self.handle
-        self.test_cache_file = test_cache_file
+        self.input_cache = cache
 
         self.name = name
         self.bits = bits
@@ -104,8 +106,10 @@ class VW:
         self.bfgs = bfgs
         self.mem = mem
         self.nn = nn
+        self.compressed = compressed
         self.extra_args = kwargs
-
+        self.datafile = datafile
+        
         # Do some sanity checking for compatability between models
         if self.lda:
             assert not self.l1
@@ -149,7 +153,8 @@ class VW:
         if self.bfgs:                            l.append('--bfgs')
         if self.adaptive:                        l.append('--adaptive')
         if self.nn                  is not None: l.append('--nn=%d' % self.nn)
-
+        if self.compressed:                      l.append('--compressed')
+        if self.datafile            is not None: l.append('-d {}'.format(self.datafile))
 
 
         for key, value in self.extra_args.items():
@@ -179,8 +184,8 @@ class VW:
                     % (self.passes, cache_file, model_file)
 
     def vw_test_command(self, model_file, prediction_file):
-        if self.test_cache_file:
-            return self.vw_base_command([self.vw]) + ' --cache_file %s -t -i %s -p %s' % (self.test_cache_file, model_file, prediction_file)
+        if self.input_cache:
+            return self.vw_base_command([self.vw]) + ' --cache_file %s -t -i %s -p %s' % (self.input_cache, model_file, prediction_file)
         else:
             return self.vw_base_command([self.vw]) + ' -t -i %s -p %s' % (model_file, prediction_file)
 
@@ -218,7 +223,8 @@ class VW:
 
         # Remove the old cache and model files
         if not self.incremental:
-            safe_remove(cache_file)
+            if not self.input_cache:
+                safe_remove(cache_file)
             safe_remove(model_file)
 
         # Run the actual training
@@ -331,7 +337,11 @@ class VW:
         return os.path.join(self.working_directory, self.filename)
 
     def get_cache_file(self):
-        return os.path.join(self.working_directory, '%s.cache' % (self.handle))
+        if self.input_cache:
+            return self.input_cache
+        else:
+            return os.path.join(self.working_directory, '%s.cache' % (self.handle))
+        
 
     def get_prediction_file(self):
         return os.path.join(self.working_directory, '%s.prediction' % (self.handle))
