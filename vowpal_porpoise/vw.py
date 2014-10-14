@@ -78,7 +78,6 @@ class VW:
             self.incremental = True
 
         self.incremental = incremental
-        self.filename = '%s.model' % self.handle
         self.input_cache = cache
 
         self.name = name
